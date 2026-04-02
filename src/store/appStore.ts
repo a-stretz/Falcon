@@ -221,6 +221,12 @@ export const useAppStore = create<AppState>()(
     {
       name: 'falcon-interview-prep',
       storage: createJSONStorage(() => localStorage),
+      onRehydrateStorage: () => (state) => {
+        // Migrate: replace old story-bank stories (story-001…) with vault stories (vault-001…)
+        if (state && state.stories.length > 0 && state.stories[0].id.startsWith('story-')) {
+          state.stories = buildDefaultStories();
+        }
+      },
       // Don't persist transient session state
       partialize: (s) => ({
         profile: s.profile,
