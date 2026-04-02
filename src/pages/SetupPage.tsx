@@ -21,6 +21,7 @@ const DEFAULT_CONFIG: SessionConfig = {
   knownWeaknessToTest: '',
   desiredAnswerLength: 'standard',
   interviewStageNotes: '',
+  conversationalMode: false,
 };
 
 export function SetupPage() {
@@ -193,6 +194,30 @@ export function SetupPage() {
             <option value="typed">Typed</option>
             <option value="voice">Voice</option>
           </Select>
+        </div>
+
+        {/* Conversational mode toggle */}
+        <div className="mb-6 flex items-start gap-3 p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
+          <button
+            role="switch"
+            aria-checked={config.conversationalMode}
+            onClick={() => setConfig((c) => ({ ...c, conversationalMode: !c.conversationalMode }))}
+            className={`relative shrink-0 mt-0.5 w-10 h-5 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+              config.conversationalMode ? 'bg-indigo-600' : 'bg-zinc-700'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                config.conversationalMode ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+          <div>
+            <p className="text-sm font-medium text-zinc-300">Conversational mode</p>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              When on, Claude may ask targeted follow-up questions based on your previous answer instead of always generating independent questions.
+            </p>
+          </div>
         </div>
 
         {/* Optional inputs */}

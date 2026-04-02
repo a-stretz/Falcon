@@ -8,9 +8,12 @@ import type {
   SessionConfig,
   RewriteMode,
   RewriteVariant,
+  EditorialMarkup,
+  Difficulty,
 } from '../types';
 import {
   buildQuestionGenerationPrompt,
+  buildEditorialMarkupPrompt,
   buildEvaluationPrompt,
   buildRewritePrompt,
   buildSessionSummaryPrompt,
@@ -49,6 +52,7 @@ export async function generateQuestion(params: {
   questionsAsked: InterviewQuestion[];
   sessionId: string;
   orderIndex: number;
+  previousAnswer?: string;
 }): Promise<InterviewQuestion> {
   const client = getClient(params.apiKey);
   const prompt = buildQuestionGenerationPrompt(params);
@@ -60,7 +64,14 @@ export async function generateQuestion(params: {
   });
 
   const text = (response.content[0] as { type: string; text: string }).text;
-  const parsed = parseJSON<{ questionText: string; questionType: string; rationale: string }>(text);
+  const parsed = parseJSON<{
+    questionText: string;
+    questionType: string;
+    rationale: string;
+    complexityTag?: 'focused' | 'layered';
+    followUpOf?: string;
+    storyHints?: InterviewQuestion['storyHints'];
+  }>(text);
 
   return {
     id: nanoid(),
@@ -69,6 +80,48 @@ export async function generateQuestion(params: {
     questionType: parsed.questionType as InterviewQuestion['questionType'],
     rationale: parsed.rationale,
     orderIndex: params.orderIndex,
+    complexityTag: parsed.complexityTag,
+    followUpOf: parsed.followUpOf,
+    storyHints: parsed.storyHints,
+  };
+}
+
+// ─── Generate editorial markup (Change 1) ────────────────────────────────────
+
+export async function generateEditorialMarkup(params: {
+  apiKey: string;
+  question: InterviewQuestion;
+  transcript: string;
+  profile: CandidateProfile;
+  stories: Story[];
+  sessionId: string;
+  previousMarkup?: EditorialMarkup | null;
+}): Promise<EditorialMarkup> {
+  const client = getClient(params.apiKey);
+  const prompt = buildEditorialMarkupPrompt(params);
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2000,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const text = (response.content[0] as { type: string; text: string }).text;
+  const parsed = parseJSON<{
+    spans: EditorialMarkup['spans'];
+    missingElements: string[];
+    cleanVersion: string;
+  }>(text);
+
+  return {
+    id: nanoid(),
+    questionId: params.question.id,
+    sessionId: params.sessionId,
+    originalTranscript: params.transcript,
+    spans: parsed.spans,
+    missingElements: parsed.missingElements ?? [],
+    cleanVersion: parsed.cleanVersion,
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -79,12 +132,27 @@ export async function evaluateAnswer(params: {
   question: InterviewQuestion;
   answer: string;
   inputMode: AnswerEvaluation['inputMode'];
+  inputTruncated?: boolean;
   profile: CandidateProfile;
   stories: Story[];
   sessionId: string;
+  difficulty?: Difficulty;
+  intendedStoryId?: string;
+  previousEvaluation?: AnswerEvaluation | null;
+  attemptNumber?: number;
+  previousAttemptId?: string;
 }): Promise<AnswerEvaluation> {
   const client = getClient(params.apiKey);
-  const prompt = buildEvaluationPrompt(params);
+  const prompt = buildEvaluationPrompt({
+    question: params.question,
+    answer: params.answer,
+    profile: params.profile,
+    stories: params.stories,
+    difficulty: params.difficulty,
+    intendedStoryId: params.intendedStoryId,
+    previousEvaluation: params.previousEvaluation,
+    inputTruncated: params.inputTruncated,
+  });
 
   const response = await client.messages.create({
     model: MODEL,
@@ -107,12 +175,16 @@ export async function evaluateAnswer(params: {
     questionId: params.question.id,
     responseText: params.answer,
     inputMode: params.inputMode,
+    inputTruncated: params.inputTruncated,
     scoresByDimension: parsed.scoresByDimension,
     overallScore: parsed.overallScore,
     writtenFeedback: parsed.writtenFeedback,
     strongerStorySuggestion: parsed.strongerStorySuggestion,
     recurringWeaknessTags: parsed.recurringWeaknessTags ?? [],
     rewriteVariants: [],
+    intendedStoryId: params.intendedStoryId,
+    attemptNumber: params.attemptNumber ?? 1,
+    previousAttemptId: params.previousAttemptId,
     createdAt: new Date().toISOString(),
   };
 }
@@ -138,11 +210,12 @@ export async function rewriteAnswer(params: {
   });
 
   const text = (response.content[0] as { type: string; text: string }).text;
-  const parsed = parseJSON<{ rewrittenAnswer: string; changesSummary: string[] }>(text);
+  const parsed = parseJSON<{ rewrittenAnswer: string; wordCount?: number; changesSummary: string[] | string }>(text);
 
   return {
     mode: params.mode,
     text: parsed.rewrittenAnswer,
+    wordCount: parsed.wordCount,
     changesSummary: Array.isArray(parsed.changesSummary)
       ? parsed.changesSummary.join('\n')
       : parsed.changesSummary,
@@ -172,32 +245,4 @@ export async function generateSessionSummary(params: {
   const parsed = parseJSON<Omit<SessionSummary, 'sessionId'>>(text);
 
   return { ...parsed, sessionId: params.sessionId };
-}
-
-// ─── Streaming variant for question generation (optional) ─────────────────────
-
-export async function* streamEvaluation(params: {
-  apiKey: string;
-  question: InterviewQuestion;
-  answer: string;
-  profile: CandidateProfile;
-  stories: Story[];
-}): AsyncGenerator<string> {
-  const client = getClient(params.apiKey);
-  const prompt = buildEvaluationPrompt(params);
-
-  const stream = client.messages.stream({
-    model: MODEL,
-    max_tokens: 1500,
-    messages: [{ role: 'user', content: prompt }],
-  });
-
-  for await (const chunk of stream) {
-    if (
-      chunk.type === 'content_block_delta' &&
-      chunk.delta.type === 'text_delta'
-    ) {
-      yield chunk.delta.text;
-    }
-  }
 }

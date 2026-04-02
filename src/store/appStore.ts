@@ -6,6 +6,7 @@ import type {
   InterviewSession,
   InterviewQuestion,
   AnswerEvaluation,
+  EditorialMarkup,
   SessionSummary,
   AppSettings,
   SessionConfig,
@@ -24,6 +25,7 @@ interface AppState {
   sessions: InterviewSession[];
   questions: Record<string, InterviewQuestion[]>;
   evaluations: Record<string, AnswerEvaluation[]>;
+  markups: Record<string, EditorialMarkup[]>;
   summaries: Record<string, SessionSummary>;
 
   // Settings
@@ -56,6 +58,9 @@ interface AppState {
   addEvaluation: (evaluation: AnswerEvaluation) => void;
   addRewriteVariant: (evalId: string, variant: AnswerEvaluation['rewriteVariants'][0]) => void;
 
+  // Actions — Markups
+  addMarkup: (markup: EditorialMarkup) => void;
+
   // Actions — Summary
   setSummary: (sessionId: string, summary: SessionSummary) => void;
 
@@ -76,6 +81,7 @@ export const useAppStore = create<AppState>()(
       sessions: [],
       questions: {},
       evaluations: {},
+      markups: {},
       summaries: {},
       settings: DEFAULT_SETTINGS,
       activeSessionId: null,
@@ -188,6 +194,16 @@ export const useAppStore = create<AppState>()(
           return { evaluations: updated };
         }),
 
+      // ── Markups ──────────────────────────────────────────────────────────
+
+      addMarkup: (markup) =>
+        set((s) => ({
+          markups: {
+            ...s.markups,
+            [markup.sessionId]: [...(s.markups[markup.sessionId] ?? []), markup],
+          },
+        })),
+
       // ── Summary ──────────────────────────────────────────────────────────
 
       setSummary: (sessionId, summary) =>
@@ -212,6 +228,7 @@ export const useAppStore = create<AppState>()(
         sessions: s.sessions,
         questions: s.questions,
         evaluations: s.evaluations,
+        markups: s.markups,
         summaries: s.summaries,
         settings: s.settings,
       }),
@@ -234,4 +251,17 @@ export const selectCurrentQuestion = (s: AppState) => {
   if (!s.activeSessionId) return null;
   const qs = s.questions[s.activeSessionId] ?? [];
   return qs[s.activeQuestionIndex] ?? null;
+};
+
+// Returns the latest evaluation for a given question (highest attemptNumber)
+export const selectLatestEvaluation = (sessionId: string, questionId: string) => (s: AppState) => {
+  const evals = (s.evaluations[sessionId] ?? []).filter((e) => e.questionId === questionId);
+  if (evals.length === 0) return null;
+  return evals.reduce((best, curr) => (curr.attemptNumber >= best.attemptNumber ? curr : best));
+};
+
+// Returns the latest markup for a given question
+export const selectQuestionMarkup = (sessionId: string, questionId: string) => (s: AppState) => {
+  const all = (s.markups[sessionId] ?? []).filter((m) => m.questionId === questionId);
+  return all[all.length - 1] ?? null;
 };

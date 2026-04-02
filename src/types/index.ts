@@ -60,6 +60,27 @@ export interface Story {
   updatedAt: string;
 }
 
+// ─── Story Vault V3 (extended — ready for STAR_VAULT_current.md integration) ──
+
+export interface StoryVaultEntry extends Story {
+  tier: 1 | 2;
+  debrief?: {
+    leadWith: string;        // what to open the answer with
+    commonMistake: string;   // the drift pattern to avoid
+    coreMessage: string;     // the 1-sentence point of the story
+  };
+  weights?: {
+    td: number;  // technical depth 0–1
+    pi: number;  // product/business intuition 0–1
+    tr: number;  // trust/rapport 0–1
+  };
+  overlapGroup?: string;   // e.g. "voice-assist", "forensic-qa", "smartplayer"
+  depthRating?: 'thick' | 'standard' | 'thin';
+  questionVibes?: string[];
+  competencyTags?: string[];
+  domainTags?: string[];
+}
+
 // ─── Session ──────────────────────────────────────────────────────────────────
 
 export type QuestionStyle =
@@ -86,11 +107,12 @@ export interface SessionConfig {
   focusArea: string;
   questionStyle: QuestionStyle;
   difficulty: Difficulty;
-  sessionLength: number; // number of questions
+  sessionLength: number;
   interactionMode: InteractionMode;
   knownWeaknessToTest: string;
   desiredAnswerLength: 'concise' | 'standard' | 'detailed';
   interviewStageNotes: string;
+  conversationalMode: boolean; // Change 3: ask follow-ups based on previous answer
 }
 
 export interface InterviewSession {
@@ -115,6 +137,13 @@ export type QuestionType =
   | 'technical-collab'
   | 'ai-systems';
 
+// Change 5: story hints per question
+export interface StoryHint {
+  storyId: string;
+  storyTitle: string;
+  matchReason: string;
+}
+
 export interface InterviewQuestion {
   id: string;
   sessionId: string;
@@ -122,12 +151,17 @@ export interface InterviewQuestion {
   questionType: QuestionType;
   rationale: string;
   orderIndex: number;
+  complexityTag?: 'focused' | 'layered';      // Change 3
+  followUpOf?: string;                         // Change 3: questionId of parent Q
+  storyHints?: StoryHint[];                    // Change 5
 }
 
+// Change 6: excerpt per dimension score
 export interface DimensionScore {
   dimension: EvalDimension;
   score: number; // 1–5
   comment: string;
+  excerpt?: string; // verbatim quote from transcript that explains the score
 }
 
 export type EvalDimension =
@@ -157,17 +191,48 @@ export type RecurringWeaknessTag =
   | 'weak-opener'
   | 'no-clear-result';
 
+// Change 7: tiered rewrites
 export type RewriteMode =
-  | 'tighter'
-  | 'more-structured'
+  // Compression tiers (Change 7)
+  | 'core'      // 60-80 words — only what's load-bearing
+  | 'full'      // ~150 words — the real tighter version
+  | 'detailed'  // full structured — current default length
+  // On-demand style variants (Change 7)
   | 'more-executive'
   | 'more-metrics-driven'
-  | 'more-technical-accessible';
+  | 'more-technical-accessible'
+  // Legacy (kept for backward compat with stored sessions)
+  | 'tighter'
+  | 'more-structured';
 
 export interface RewriteVariant {
   mode: RewriteMode;
   text: string;
+  wordCount?: number;
   changesSummary: string;
+}
+
+// Change 1: Editorial markup
+export type MarkupAction = 'KEEP' | 'CUT' | 'COMPRESS' | 'REORDER' | 'UPGRADE' | 'PIVOT';
+
+export interface MarkupSpan {
+  action: MarkupAction;
+  text: string;             // the verbatim text from the transcript
+  note: string;             // 1-sentence explanation
+  replacement?: string;     // COMPRESS: shorter version; UPGRADE: better phrasing
+  pivotType?: 'productive' | 'derailing'; // PIVOT only
+  reorderNote?: string;     // REORDER: suggested position/destination
+}
+
+export interface EditorialMarkup {
+  id: string;
+  questionId: string;
+  sessionId: string;
+  originalTranscript: string;
+  spans: MarkupSpan[];        // sequential, covers all transcript text
+  missingElements: string[];  // gaps not present in transcript at all
+  cleanVersion: string;       // CUT removed, COMPRESS applied
+  createdAt: string;
 }
 
 export interface AnswerEvaluation {
@@ -176,12 +241,17 @@ export interface AnswerEvaluation {
   questionId: string;
   responseText: string;
   inputMode: InteractionMode;
+  inputTruncated?: boolean;           // Change 8: flagged if recording was cut off
   scoresByDimension: DimensionScore[];
-  overallScore: number; // 1–5, computed average
+  overallScore: number;
   writtenFeedback: string;
   strongerStorySuggestion: string | null;
   recurringWeaknessTags: RecurringWeaknessTag[];
   rewriteVariants: RewriteVariant[];
+  editorialMarkupId?: string;         // Change 1: links to preceding markup
+  intendedStoryId?: string;           // Change 5: which story the user picked from hints
+  attemptNumber: number;              // Change 4: 1, 2, or 3
+  previousAttemptId?: string;         // Change 4: links to prior attempt
   createdAt: string;
 }
 
@@ -204,18 +274,19 @@ export interface SessionSummary {
 export interface AppSettings {
   anthropicApiKey: string;
   defaultInteractionMode: InteractionMode;
-  voiceRate: number; // 0.8–1.5
+  voiceRate: number;
   selectedVoiceURI: string;
 }
 
-// ─── Store shape (used by Zustand) ────────────────────────────────────────────
+// ─── Store shape ──────────────────────────────────────────────────────────────
 
 export interface PersistedData {
   profile: CandidateProfile | null;
   stories: Story[];
   sessions: InterviewSession[];
-  questions: Record<string, InterviewQuestion[]>; // sessionId → questions
-  evaluations: Record<string, AnswerEvaluation[]>; // sessionId → evaluations
-  summaries: Record<string, SessionSummary>; // sessionId → summary
+  questions: Record<string, InterviewQuestion[]>;
+  evaluations: Record<string, AnswerEvaluation[]>;
+  markups: Record<string, EditorialMarkup[]>;     // Change 1
+  summaries: Record<string, SessionSummary>;
   settings: AppSettings;
 }

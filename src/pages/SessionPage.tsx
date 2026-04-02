@@ -2,18 +2,34 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/appStore';
 import { buildDefaultProfile, buildDefaultStories } from '../lib/defaultData';
-import { generateQuestion, evaluateAnswer, rewriteAnswer, generateSessionSummary } from '../lib/claude';
+import {
+  generateQuestion,
+  generateEditorialMarkup,
+  evaluateAnswer,
+  rewriteAnswer,
+  generateSessionSummary,
+} from '../lib/claude';
 import { QUESTION_TYPE_LABELS } from '../lib/prompts';
-import type { InterviewQuestion, AnswerEvaluation, RewriteMode } from '../types';
+import type { InterviewQuestion, AnswerEvaluation, RewriteMode, EditorialMarkup } from '../types';
 import { Button } from '../components/ui/Button';
 import { Textarea } from '../components/ui/Textarea';
 import { Badge } from '../components/ui/Badge';
 import { ScoreBadge } from '../components/ui/ScoreBar';
 import { EvaluationPanel } from '../components/session/EvaluationPanel';
+import { MarkupPanel } from '../components/session/MarkupPanel';
 import { MicButton, MicStateIndicator } from '../components/session/MicButton';
 import { useVoice } from '../hooks/useVoice';
 
-type SessionPhase = 'loading-question' | 'answering' | 'evaluating' | 'reviewed' | 'session-done';
+type SessionPhase =
+  | 'loading-question'
+  | 'answering'
+  | 'generating-markup'
+  | 'markup-review'
+  | 'evaluating'
+  | 'reviewed'
+  | 'session-done';
+
+const MAX_ATTEMPTS = 3;
 
 export function SessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -21,7 +37,7 @@ export function SessionPage() {
   const {
     profile, stories, settings,
     sessions, questions: allQuestions, evaluations: allEvaluations,
-    addQuestion, addEvaluation, addRewriteVariant, completeSession, setSummary,
+    addQuestion, addEvaluation, addRewriteVariant, addMarkup, completeSession, setSummary,
     setActiveQuestionIndex,
   } = useAppStore();
 
@@ -36,6 +52,12 @@ export function SessionPage() {
   const [answer, setAnswer] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState<InterviewQuestion | null>(null);
   const [currentEvaluation, setCurrentEvaluation] = useState<AnswerEvaluation | null>(null);
+  const [previousEvaluation, setPreviousEvaluation] = useState<AnswerEvaluation | null>(null);
+  const [currentMarkup, setCurrentMarkup] = useState<EditorialMarkup | null>(null);
+  const [attemptNumber, setAttemptNumber] = useState(1);
+  const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null);
+  const [showStoryHints, setShowStoryHints] = useState(false);
+  const [inputTruncated, setInputTruncated] = useState(false);
   const [rewriteLoading, setRewriteLoading] = useState(false);
   const [error, setError] = useState('');
   const [interactionMode, setInteractionMode] = useState(session?.config.interactionMode ?? 'typed');
@@ -43,10 +65,11 @@ export function SessionPage() {
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Voice hook
+  // Voice hook — Change 8: manual stop, 3min max, truncation
   const voice = useVoice({
-    onTranscript: (text) => {
+    onTranscript: (text, truncated) => {
       setAnswer(text);
+      setInputTruncated(truncated ?? false);
       setPhase('answering');
     },
   });
@@ -61,12 +84,16 @@ export function SessionPage() {
     if (sessionQuestions.length === 0) {
       loadNextQuestion();
     } else {
-      // Resuming — go to end of questions
       const lastQ = sessionQuestions[sessionQuestions.length - 1];
       setCurrentQuestion(lastQ);
-      const lastEval = sessionEvaluations.find((e) => e.questionId === lastQ.id);
+      // Find latest evaluation for last question
+      const evals = sessionEvaluations.filter((e) => e.questionId === lastQ.id);
+      const lastEval = evals.length > 0
+        ? evals.reduce((a, b) => b.attemptNumber >= a.attemptNumber ? b : a)
+        : null;
       if (lastEval) {
         setCurrentEvaluation(lastEval);
+        setAttemptNumber(lastEval.attemptNumber);
         setPhase('reviewed');
       } else {
         setPhase('answering');
@@ -82,8 +109,19 @@ export function SessionPage() {
     setError('');
     setAnswer('');
     setCurrentEvaluation(null);
+    setPreviousEvaluation(null);
+    setCurrentMarkup(null);
+    setAttemptNumber(1);
+    setSelectedStoryId(null);
+    setShowStoryHints(false);
+    setInputTruncated(false);
 
     try {
+      // For conversational mode, pass the last answer
+      const lastEvalForConversational = session.config.conversationalMode && sessionEvaluations.length > 0
+        ? sessionEvaluations[sessionEvaluations.length - 1]
+        : null;
+
       const q = await generateQuestion({
         apiKey: settings.anthropicApiKey,
         config: session.config,
@@ -92,6 +130,7 @@ export function SessionPage() {
         questionsAsked: sessionQuestions,
         sessionId,
         orderIndex: sessionQuestions.length,
+        previousAnswer: lastEvalForConversational?.responseText,
       });
 
       addQuestion(sessionId, q);
@@ -99,7 +138,6 @@ export function SessionPage() {
       setActiveQuestionIndex(sessionQuestions.length);
       setPhase('answering');
 
-      // Read question aloud in voice mode
       if (interactionMode === 'voice') {
         voice.speak(q.questionText, settings.voiceRate, settings.selectedVoiceURI);
       }
@@ -111,8 +149,37 @@ export function SessionPage() {
     }
   }
 
+  // Submit answer → generate markup first (Change 1)
   async function handleSubmitAnswer() {
     if (!currentQuestion || !sessionId || !answer.trim()) return;
+    setPhase('generating-markup');
+    setError('');
+
+    try {
+      const markup = await generateEditorialMarkup({
+        apiKey: settings.anthropicApiKey,
+        question: currentQuestion,
+        transcript: answer.trim(),
+        profile: effectiveProfile,
+        stories: effectiveStories,
+        sessionId,
+        previousMarkup: currentMarkup, // null on attempt 1
+      });
+
+      addMarkup(markup);
+      setCurrentMarkup(markup);
+      setPhase('markup-review');
+      scrollToBottom();
+    } catch (e) {
+      // If markup fails, skip directly to evaluation
+      setError(`Markup generation failed — skipping to evaluation. ${e instanceof Error ? e.message : ''}`);
+      await runEvaluation();
+    }
+  }
+
+  // After markup review, evaluate
+  async function runEvaluation() {
+    if (!currentQuestion || !sessionId) return;
     setPhase('evaluating');
     setError('');
 
@@ -122,9 +189,15 @@ export function SessionPage() {
         question: currentQuestion,
         answer: answer.trim(),
         inputMode: interactionMode,
+        inputTruncated,
         profile: effectiveProfile,
         stories: effectiveStories,
         sessionId,
+        difficulty: session?.config.difficulty,
+        intendedStoryId: selectedStoryId ?? undefined,
+        previousEvaluation,
+        attemptNumber,
+        previousAttemptId: previousEvaluation?.id,
       });
 
       addEvaluation(ev);
@@ -133,8 +206,23 @@ export function SessionPage() {
       scrollToBottom();
     } catch (e) {
       setError(`Evaluation failed: ${e instanceof Error ? e.message : String(e)}`);
-      setPhase('answering');
+      setPhase('markup-review');
     }
+  }
+
+  // Try Again — Change 4
+  function handleTryAgain() {
+    if (!currentQuestion) return;
+    setPreviousEvaluation(currentEvaluation);
+    setCurrentEvaluation(null);
+    setCurrentMarkup(null);
+    setAttemptNumber((n) => n + 1);
+    setAnswer('');
+    setSelectedStoryId(null);
+    setShowStoryHints(false);
+    setInputTruncated(false);
+    setPhase('answering');
+    scrollToBottom();
   }
 
   async function handleRewrite(mode: RewriteMode) {
@@ -153,9 +241,9 @@ export function SessionPage() {
       });
 
       addRewriteVariant(currentEvaluation.id, variant);
-      // Force re-render by refreshing local eval ref
-      const updated = { ...currentEvaluation, rewriteVariants: [...currentEvaluation.rewriteVariants, variant] };
-      setCurrentEvaluation(updated);
+      setCurrentEvaluation((ev) =>
+        ev ? { ...ev, rewriteVariants: [...ev.rewriteVariants, variant] } : ev
+      );
     } catch (e) {
       setError(`Rewrite failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -224,7 +312,6 @@ export function SessionPage() {
           </span>
         </div>
 
-        {/* Progress bar */}
         <div className="flex-1 flex items-center gap-2">
           <div className="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
             <div
@@ -242,9 +329,7 @@ export function SessionPage() {
           <button
             onClick={() => setInteractionMode('typed')}
             className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
-              interactionMode === 'typed'
-                ? 'bg-zinc-700 text-zinc-100'
-                : 'text-zinc-400 hover:text-zinc-200'
+              interactionMode === 'typed' ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             Type
@@ -254,9 +339,7 @@ export function SessionPage() {
             disabled={!voice.supported}
             title={!voice.supported ? 'Voice not supported in this browser' : undefined}
             className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer disabled:opacity-40 ${
-              interactionMode === 'voice'
-                ? 'bg-zinc-700 text-zinc-100'
-                : 'text-zinc-400 hover:text-zinc-200'
+              interactionMode === 'voice' ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             Voice
@@ -268,15 +351,16 @@ export function SessionPage() {
         </Button>
       </header>
 
-      {/* Main chat area */}
+      {/* Main content */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
           {/* Previous Q&A */}
           {sessionQuestions.slice(0, -1).map((q, idx) => {
-            const ev = sessionEvaluations.find((e) => e.questionId === q.id);
-            return (
-              <PastTurn key={q.id} question={q} evaluation={ev} index={idx + 1} />
-            );
+            const evals = sessionEvaluations.filter((e) => e.questionId === q.id);
+            const latestEval = evals.length > 0
+              ? evals.reduce((a, b) => b.attemptNumber >= a.attemptNumber ? b : a)
+              : undefined;
+            return <PastTurn key={q.id} question={q} evaluation={latestEval} index={idx + 1} />;
           })}
 
           {/* Current question */}
@@ -288,28 +372,70 @@ export function SessionPage() {
                   Q
                 </div>
                 <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs text-zinc-500 font-medium">
-                      Question {currentIndex}
-                    </span>
-                    <Badge variant="info">
-                      {QUESTION_TYPE_LABELS[currentQuestion.questionType]}
-                    </Badge>
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span className="text-xs text-zinc-500 font-medium">Question {currentIndex}</span>
+                    <Badge variant="info">{QUESTION_TYPE_LABELS[currentQuestion.questionType]}</Badge>
+                    {currentQuestion.complexityTag === 'layered' && (
+                      <Badge variant="warning">Layered</Badge>
+                    )}
+                    {currentQuestion.followUpOf && (
+                      <Badge variant="purple">Follow-up</Badge>
+                    )}
+                    {attemptNumber > 1 && (
+                      <Badge variant="warning">Attempt {attemptNumber}/{MAX_ATTEMPTS}</Badge>
+                    )}
                   </div>
                   <p className="text-zinc-100 text-base leading-relaxed">
                     {currentQuestion.questionText}
                   </p>
+
+                  {/* Change 5: Collapsible story hints */}
+                  {currentQuestion.storyHints && currentQuestion.storyHints.length > 0 && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() => setShowStoryHints((v) => !v)}
+                        className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1"
+                      >
+                        <span>{showStoryHints ? '▼' : '▶'}</span>
+                        Story hints ({currentQuestion.storyHints.length})
+                      </button>
+                      {showStoryHints && (
+                        <div className="mt-2 space-y-1.5">
+                          {currentQuestion.storyHints.map((hint) => {
+                            const isSelected = selectedStoryId === hint.storyId;
+                            return (
+                              <button
+                                key={hint.storyId}
+                                onClick={() => setSelectedStoryId(isSelected ? null : hint.storyId)}
+                                className={`w-full text-left text-xs p-2.5 rounded-lg border transition-colors ${
+                                  isSelected
+                                    ? 'bg-indigo-900/30 border-indigo-700/50 text-indigo-200'
+                                    : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600'
+                                }`}
+                              >
+                                <span className="font-medium">{hint.storyTitle}</span>
+                                <span className="text-zinc-500 block mt-0.5">{hint.matchReason}</span>
+                              </button>
+                            );
+                          })}
+                          <p className="text-[10px] text-zinc-600">Tap a story to mark it as your intended example</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Answer input */}
-              {(phase === 'answering' || phase === 'evaluating') && (
+              {(phase === 'answering' || phase === 'generating-markup') && (
                 <div className="ml-10 space-y-3">
                   {interactionMode === 'voice' ? (
                     <div className="space-y-3">
                       <MicStateIndicator
                         micState={voice.micState}
                         interimTranscript={voice.interimTranscript}
+                        timeRemaining={voice.timeRemaining}
+                        truncated={inputTruncated}
                       />
                       {answer && (
                         <div className="p-3 bg-zinc-900 border border-zinc-700 rounded-lg">
@@ -322,20 +448,21 @@ export function SessionPage() {
                           micState={voice.micState}
                           onStart={voice.startListening}
                           onStop={voice.stopListening}
-                          disabled={phase === 'evaluating'}
+                          disabled={phase === 'generating-markup'}
+                          timeRemaining={voice.timeRemaining}
                         />
                         {answer && voice.micState === 'idle' && (
                           <Button
                             variant="primary"
                             size="md"
-                            loading={phase === 'evaluating'}
+                            loading={phase === 'generating-markup'}
                             onClick={handleSubmitAnswer}
                           >
-                            Submit Answer
+                            {phase === 'generating-markup' ? 'Analyzing…' : 'Submit Answer'}
                           </Button>
                         )}
-                        {answer && (
-                          <Button variant="ghost" size="sm" onClick={() => setAnswer('')}>
+                        {answer && voice.micState === 'idle' && phase === 'answering' && (
+                          <Button variant="ghost" size="sm" onClick={() => { setAnswer(''); setInputTruncated(false); }}>
                             Clear
                           </Button>
                         )}
@@ -349,7 +476,7 @@ export function SessionPage() {
                         onChange={(e) => setAnswer(e.target.value)}
                         placeholder="Type your answer here…"
                         rows={6}
-                        disabled={phase === 'evaluating'}
+                        disabled={phase === 'generating-markup'}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                             handleSubmitAnswer();
@@ -361,11 +488,11 @@ export function SessionPage() {
                         <Button
                           variant="primary"
                           size="md"
-                          loading={phase === 'evaluating'}
+                          loading={phase === 'generating-markup'}
                           disabled={!answer.trim()}
                           onClick={handleSubmitAnswer}
                         >
-                          {phase === 'evaluating' ? 'Evaluating…' : 'Submit Answer'}
+                          {phase === 'generating-markup' ? 'Analyzing…' : 'Submit Answer'}
                         </Button>
                       </div>
                     </div>
@@ -384,7 +511,31 @@ export function SessionPage() {
                 </div>
               )}
 
-              {/* Evaluation */}
+              {/* Change 1: Markup review phase */}
+              {phase === 'markup-review' && currentMarkup && (
+                <div className="ml-10">
+                  <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
+                    <MarkupPanel
+                      markup={currentMarkup}
+                      onProceed={runEvaluation}
+                      proceedLabel="Score this answer →"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Evaluating spinner */}
+              {phase === 'evaluating' && (
+                <div className="ml-10 flex items-center gap-2 text-zinc-500 text-sm">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  Evaluating…
+                </div>
+              )}
+
+              {/* Evaluated */}
               {phase === 'reviewed' && currentEvaluation && (
                 <div className="ml-10 space-y-4">
                   {/* Answer display */}
@@ -393,11 +544,17 @@ export function SessionPage() {
                       A
                     </div>
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="text-xs text-zinc-500">Your answer</span>
                         <ScoreBadge score={currentEvaluation.overallScore} />
                         {currentEvaluation.inputMode === 'voice' && (
                           <Badge variant="purple">Voice</Badge>
+                        )}
+                        {currentEvaluation.inputTruncated && (
+                          <Badge variant="warning">Truncated</Badge>
+                        )}
+                        {currentEvaluation.attemptNumber > 1 && (
+                          <Badge variant="info">Attempt {currentEvaluation.attemptNumber}</Badge>
                         )}
                       </div>
                       <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
@@ -412,6 +569,7 @@ export function SessionPage() {
                       evaluation={currentEvaluation}
                       onRequestRewrite={handleRewrite}
                       rewriteLoading={rewriteLoading}
+                      previousEvaluation={previousEvaluation}
                     />
                   </div>
 
@@ -423,6 +581,12 @@ export function SessionPage() {
                         : 'Session complete'}
                     </span>
                     <div className="flex gap-2">
+                      {/* Change 4: Try Again */}
+                      {attemptNumber < MAX_ATTEMPTS && (
+                        <Button variant="ghost" size="sm" onClick={handleTryAgain}>
+                          Try Again
+                        </Button>
+                      )}
                       {currentIndex < totalQuestions ? (
                         <Button variant="primary" onClick={handleNextQuestion}>
                           Next Question →
@@ -441,9 +605,9 @@ export function SessionPage() {
 
           {/* Error */}
           {error && (
-            <div className="px-4 py-3 bg-red-900/20 border border-red-800 rounded-lg text-red-300 text-sm">
-              {error}
-              <Button variant="ghost" size="sm" className="ml-3" onClick={() => setError('')}>
+            <div className="px-4 py-3 bg-red-900/20 border border-red-800 rounded-lg text-red-300 text-sm flex items-start justify-between gap-3">
+              <span>{error}</span>
+              <Button variant="ghost" size="sm" onClick={() => setError('')}>
                 Dismiss
               </Button>
             </div>
@@ -490,6 +654,9 @@ function PastTurn({
         <span className="text-xs text-zinc-500 shrink-0">Q{index}</span>
         <span className="flex-1 text-sm text-zinc-300 truncate">{question.questionText}</span>
         {evaluation && <ScoreBadge score={evaluation.overallScore} />}
+        {evaluation && evaluation.attemptNumber > 1 && (
+          <span className="text-xs text-zinc-500 shrink-0">×{evaluation.attemptNumber}</span>
+        )}
         <span className="text-zinc-600 text-xs ml-2">{expanded ? '▲' : '▼'}</span>
       </button>
       {expanded && evaluation && (
