@@ -29,7 +29,17 @@ function getClient(apiKey: string): Anthropic {
   });
 }
 
-const MODEL = 'claude-sonnet-4-6';
+// Per-call model routing: question generation is high-frequency but low-judgment
+// (bounded, constraint-driven output), so it runs on a faster/cheaper model.
+// Markup, evaluation, rewrite, and summary are the actual coaching product and
+// stay on a stronger model regardless of frequency.
+const MODELS = {
+  question: 'claude-haiku-4-5-20251001',
+  markup: 'claude-sonnet-5',
+  evaluation: 'claude-sonnet-5',
+  rewrite: 'claude-sonnet-5',
+  summary: 'claude-sonnet-5',
+} as const;
 
 // ─── JSON parsing helper ──────────────────────────────────────────────────────
 
@@ -58,7 +68,7 @@ export async function generateQuestion(params: {
   const prompt = buildQuestionGenerationPrompt(params);
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: MODELS.question,
     max_tokens: 512,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -101,7 +111,7 @@ export async function generateEditorialMarkup(params: {
   const prompt = buildEditorialMarkupPrompt(params);
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: MODELS.markup,
     max_tokens: 2000,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -155,7 +165,7 @@ export async function evaluateAnswer(params: {
   });
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: MODELS.evaluation,
     max_tokens: 1500,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -204,7 +214,7 @@ export async function rewriteAnswer(params: {
   const prompt = buildRewritePrompt(params);
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: MODELS.rewrite,
     max_tokens: 1000,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -236,7 +246,7 @@ export async function generateSessionSummary(params: {
   const prompt = buildSessionSummaryPrompt(params);
 
   const response = await client.messages.create({
-    model: MODEL,
+    model: MODELS.summary,
     max_tokens: 1500,
     messages: [{ role: 'user', content: prompt }],
   });
