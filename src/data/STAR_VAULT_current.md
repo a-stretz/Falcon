@@ -286,6 +286,8 @@ Drove adoption by making the documentation useful, not mandatory. Each document 
 
 **Result:** Elevated company maturity from ad hoc decision-making to structured, knowledge-driven product development. Reduced inter-departmental ambiguity and accelerated development cycles by eliminating the definitional re-establishment step from every cross-team discussion. The documentation library became the institutional memory that onboarded new team members and preserved decisions when team composition changed.
 
+**Debrief:** This story demonstrates cross-functional alignment through documentation architecture rather than facilitation alone — three distinct document types built for three distinct audiences is the structural insight, not just "wrote some docs." The differentiator: adoption was earned by making each document answer questions teams were already asking, not mandated top-down. Lead with the audience-specific design choice, not the volume of documentation produced.
+
 **Weighting:** TD: 6 | PI: 8 | TR: 9
 
 ---
@@ -367,6 +369,8 @@ Built API-based vendor integration networks that met the privacy and security st
 
 **Result:** Enabled the platform to scale from a single-sport focus toward a universal motion-analysis engine without architectural refactoring. The Phase Canon also became the interface architecture for SmartPlayer — the same abstraction that enabled sports scalability also solved the cognitive load problem in the user-facing product.
 
+**Debrief:** This story demonstrates architectural foresight — designing a data abstraction before the scaling pressure that would have forced it reactively. The "inputs stayed the same, the instructions changed" framing is the line to lead with: it's the clearest articulation of what separates a scalable architecture from a one-off build. Worth connecting explicitly to Story 9 in interview — the same Phase Canon decision solved a technical scalability problem and a UX cognitive-load problem simultaneously, which is a stronger signal than either result alone.
+
 **Weighting:** TD: 8 | PI: 8 | TR: 8
 
 ---
@@ -384,6 +388,8 @@ Built API-based vendor integration networks that met the privacy and security st
 **Action:** Built the Heuristic Profile documentation as the authoritative source of truth: precise metric definitions with the biomechanical rationale, coach-intent documentation explaining why each measurement existed, and exact keypoint terminology using BlazePose naming conventions. Made it accessible to all teams and positioned it not as a constraint but as the shared language that would accelerate every decision.
 
 **Result:** Eliminated the recurring definitional conflict by removing ambiguity from the source. Cross-functional alignment accelerated development cycles — teams could reference the document rather than re-litigating definitions in meetings. The documentation became the institutional memory that onboarded new team members without requiring tribal knowledge transfer.
+
+**Debrief:** This story demonstrates conflict resolution as a systems problem, not a people problem — the key move was refusing to arbitrate individual disputes and instead removing the ambiguity that caused them to recur. That reframing (systemic fix vs. one-off mediation) is what to lead with, since it shows judgment about where to intervene. Closely related to Story 2 and Story 11 — if asked follow-up questions, distinguish this one by its focus on resolving an active, recurring conflict rather than establishing a new standard from scratch.
 
 **Weighting:** TD: 7 | PI: 8 | TR: 9
 
@@ -405,6 +411,8 @@ Documented both failure types with mathematical precision — not "the angle is 
 
 **Result:** Provided engineering with the exact mathematical root cause specifications needed to deploy targeted fixes. Restored accuracy to flagship metrics and established the diagnostic methodology (frame-by-frame mathematical tracing) as a repeatable approach for future geometry debugging.
 
+**Debrief:** This is a technical-depth story where the credibility comes from precision, not effort — the differentiator is the exact root-cause language ("the calculation is using the chest plane instead of the sagittal plane, producing a systematic bias") versus the vague "the model is wrong" most PMs would report. Lead with that level of specificity, since it's the clearest evidence of hands-on technical capability. Pairs well with Story 3 for "highly technical PM" tests — this one is narrower and more mathematically specific, Story 3 is the broader forensic-methodology story.
+
 **Weighting:** TD: 10 | PI: 8 | TR: 7
 
 ---
@@ -422,6 +430,8 @@ Documented both failure types with mathematical precision — not "the angle is 
 **Action:** Defined frame-level synchronization protocols for the time-series data — explicit alignment rules for how video timestamps, skeleton keyframe data, and metric calculation windows were matched. Worked with engineering to implement latency compensation and alignment logic that handled the variable processing times of each data stream. Established the synchronization tolerance standards that defined when the system was "aligned" versus when a frame was flagged as unreliable.
 
 **Result:** Achieved reliable synchronization across all three data streams, producing a performance review interface where video, skeleton, and metrics aligned accurately enough to be used for coaching decisions. The synchronization standards became the foundation for the reliability indicators in the AI Trust UX design.
+
+**Debrief:** This story demonstrates systems-level rigor applied to a problem that's easy to underestimate — "the video and the numbers don't quite line up" sounds minor until you name what breaks downstream. The differentiator is defining explicit tolerance standards (what counts as "aligned" vs. "flagged unreliable") rather than just fixing the immediate drift. Worth noting the connection to Story 6: these synchronization standards became the technical foundation the AI Trust UX design was built on top of.
 
 **Weighting:** TD: 8 | PI: 7 | TR: 8
 
@@ -443,6 +453,8 @@ Used ChatGPT to iterate on token structures and prototype linguistic patterns, a
 
 **Result:** Automated the generation of coaching cues that referenced specific measurement outcomes, scaled across 6,075 configuration permutations without requiring manual content creation for each combination, and maintained natural-sounding language through LLM generation rather than template assembly.
 
+**Debrief:** This story demonstrates prompt/content architecture at scale — the key distinction to lead with is "generated fresh from structured data" versus "drawn from a template library," since that's what makes this a genuine AI architecture story rather than a content-ops story. It directly complements Story 1: Story 1 is the behavioral configuration system, this is the content-generation engine that configuration feeds into. Use together for an "AI/LLM product" deep dive that wants to go past a single surface-level example.
+
 **Weighting:** TD: 8 | PI: 8 | TR: 9
 
 ---
@@ -462,6 +474,8 @@ Used ChatGPT to iterate on token structures and prototype linguistic patterns, a
 Conducted market research, designed the core user flows, and defined the build scope around the minimum feature set that would answer the most important product risk: would referrers participate?
 
 **Result:** Launched the MVP, validated the network-driven sourcing model, and established a scalable candidate acquisition channel that operated in parallel with the internal outbound effort. The bounty platform became an additional supply lever alongside the BD pipeline improvement from the CRM automation work.
+
+**Debrief:** This is a clean 0-to-1 story where the discipline is in what was deliberately left out of V1, not what was built — leading with the exclusions (no workflow features, no payment automation) and the single question the MVP was designed to answer is stronger than leading with the launch itself. Also useful for tying together the outbound-automation work described elsewhere — the bounty platform and the CRM buildout were two separate scaling levers running in parallel, which is worth mentioning if asked about managing multiple initiatives at once.
 
 **Weighting:** TD: 5 | PI: 8 | TR: 9
 
